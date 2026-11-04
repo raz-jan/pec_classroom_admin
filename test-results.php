@@ -21,6 +21,7 @@ const PEC_EFRONT_ENDPOINTS = [
     'groups' => '/v1.0/Groups',
     'group' => '/v1.0/Group/',
     'attempts' => '/v1.0/CourseUserTestAttempts/',
+    'content' => '/v1.0/Course/',
 ];
 
 header('X-Content-Type-Options: nosniff');
@@ -401,6 +402,52 @@ function pecCompareTests(string $a, string $b): int
     return strnatcasecmp($a, $b);
 }
 
+/** Use the module code when present; otherwise use the owning lesson. */
+function pecModuleKey(array $content): string
+{
+    $name = html_entity_decode((string) ($content['name'] ?? ''), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    if (preg_match('/^\s*([IVXLCDM]+|\d+)\s*\.\s*(\d+)\b/iu', $name, $match)) {
+        return 'code:' . strtoupper($match[1]) . '.' . (int) $match[2];
+    }
+    $lessonId = (int) ($content['lessons_ID'] ?? 0);
+    if ($lessonId > 0) {
+        return 'lesson:' . $lessonId;
+    }
+    [$base] = pecTestSortKey($name);
+    return 'name:' . $base;
+}
+
+function pecTestNameKey(string $name): string
+{
+    return mb_strtolower(trim(html_entity_decode($name, ENT_QUOTES | ENT_HTML5, 'UTF-8')), 'UTF-8');
+}
+
+/** Count submitted attempts, including zero scores, but never an unfinished test. */
+function pecAttemptCompleted(array $attempt): bool
+{
+    if ((int) ($attempt['time_end'] ?? 0) > 0) {
+        return true;
+    }
+    $status = strtolower(trim((string) ($attempt['status'] ?? '')));
+    if (in_array($status, ['started', 'incomplete', 'in_progress', 'in progress', 'not_attempted'], true)) {
+        return false;
+    }
+    return in_array($status, ['passed', 'failed', 'completed', 'finished', 'submitted'], true)
+        || pecScoreNumeric($attempt['score'] ?? null) !== null;
+}
+
+function pecModuleResults(array $outcomes, int $total, bool $hasError): array
+{
+    if ($hasError) {
+        return ['progress' => '---', 'pass_rate' => '---'];
+    }
+    $passed = count(array_filter($outcomes));
+    return [
+        'progress' => count($outcomes) . ' / ' . $total,
+        'pass_rate' => $total > 0 ? number_format(100 * $passed / $total, 1, ',', '') . '%' : '---',
+    ];
+}
+
 function pecTooltip(array $attempt): string
 {
     $parts = [];
@@ -425,7 +472,7 @@ function pecTooltip(array $attempt): string
 }
 
 /** Export the visible matrix using the same PhpSpreadsheet dependency as admin.php. */
-function pecExportExcel(array $users, array $tests, array $matrix, array $userErrors, array $totalResults, string $course, string $group, string $loadedAt, bool $showOpinion): never
+function pecExportExcel(array $users, array $tests, array $matrix, array $userErrors, array $moduleResults, string $course, string $group, string $loadedAt, bool $showOpinion): never
 {
     $autoload = __DIR__ . '/vendor/autoload.php';
     if (!is_readable($autoload)) {
@@ -443,26 +490,28 @@ function pecExportExcel(array $users, array $tests, array $matrix, array $userEr
     $text('A2', $course . ' / ' . $group);
     $text('A3', 'Laatste update: ' . $loadedAt . ' | Mening/avis: ' . ($showOpinion ? 'zichtbaar' : 'verborgen'));
     $text('A4', 'Laatste poging per test. --- = geen score. Zie celnotities voor status, tijdstip en API-fouten.');
-    $text('A5', 'Total = geslaagde tests (minstens 60% bij een poging) / maximaal aantal unieke tests per deelnemer in deze selectie. Herkansingen tellen niet dubbel.');
-    $headers = array_merge(['Gebruiker', 'E-mail', 'Total'], $tests);
+    $text('A5', 'Voortgang = modules met een ingediende test / alle toetsmodules. Slaagpercentage = geslaagde modules (minstens 60% bij een poging) / alle toetsmodules. Herkansingen tellen eenmaal; mening/avis telt niet mee.');
+    $headers = array_merge(['Gebruiker', 'E-mail', 'Voortgang', 'Slaagpercentage'], $tests);
     foreach ($headers as $index => $header) {
         $column = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($index + 1);
         $text($column . '6', $header);
         $sheet->getColumnDimension($column)->setWidth($index < 2 ? 32 : 18);
     }
     $sheet->getColumnDimension('C')->setWidth(12);
+    $sheet->getColumnDimension('D')->setWidth(20);
     $colors = ['high' => 'C9F0C5', 'low' => 'F6D0D6', 'empty' => 'FFFFFF'];
     foreach ($users as $index => $user) {
         $row = $index + 7;
         $uid = (int) ($user['id'] ?? 0);
         $text('A' . $row, pecUserName($user));
         $text('B' . $row, (string) ($user['email'] ?? ($user['login'] ?? '')));
-        $text('C' . $row, $totalResults[$uid]);
+        $text('C' . $row, $moduleResults[$uid]['progress']);
+        $text('D' . $row, $moduleResults[$uid]['pass_rate']);
         if (isset($userErrors[$uid])) {
             $sheet->getComment('A' . $row)->getText()->createTextRun('API-fout: ' . $userErrors[$uid]);
         }
         foreach ($tests as $testIndex => $test) {
-            $cell = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($testIndex + 4) . $row;
+            $cell = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($testIndex + 5) . $row;
             $attempt = $matrix[$uid][$test] ?? null;
             $text($cell, pecDisplayScore($attempt['score'] ?? null));
             $sheet->getStyle($cell)->getFill()->setFillType('solid')->getStartColor()->setRGB($colors[pecCellClass($attempt)]);
@@ -477,7 +526,7 @@ function pecExportExcel(array $users, array $tests, array $matrix, array $userEr
     $sheet->getStyle('A6:' . $lastColumn . '6')->getAlignment()->setWrapText(true);
     $sheet->getRowDimension(6)->setRowHeight(60);
     $sheet->setAutoFilter('A6:' . $lastColumn . (count($users) + 6));
-    $sheet->freezePane('D7');
+    $sheet->freezePane('E7');
     $sheet->getPageSetup()->setOrientation('landscape')->setFitToWidth(1)->setFitToHeight(0);
     $sheet->getPageSetup()->setRowsToRepeatAtTopByStartAndEnd(1, 6);
     // Build the file before sending headers so failures still produce a readable page.
@@ -538,6 +587,8 @@ $users = [];
 $tests = [];
 $matrix = [];
 $testOutcomes = [];
+$modules = [];
+$testModules = [];
 $userErrors = [];
 $visibleAttemptCount = 0;
 $hiddenOpinionCount = 0;
@@ -565,6 +616,36 @@ try {
             throw new RuntimeException('The selected course is not in /Courses.');
         }
         $courseName = (string) ($selectedCourse['name'] ?? 'Course ' . $courseId);
+
+        // Establish the denominator before filtering users: unattempted modules count too.
+        $content = pecApiGet(PEC_EFRONT_ENDPOINTS['content'] . $courseId . '/Content', $apiBase, $apiKey);
+        if (!is_array($content['list'] ?? null)) {
+            throw new RuntimeException('Course content is not a list; module totals cannot be calculated.');
+        }
+        foreach ($content['list'] as $item) {
+            if (!is_array($item) || (int) ($item['active'] ?? 0) !== 1
+                || strtolower((string) ($item['type'] ?? '')) !== 'test') {
+                continue;
+            }
+            $name = trim((string) ($item['name'] ?? ''));
+            if ($name === '') {
+                throw new RuntimeException('An active test has no name; module totals cannot be calculated.');
+            }
+            $opinion = pecIsOpinionTest($name);
+            if ($showOpinion || !$opinion) {
+                $tests[$name] = true;
+            }
+            if ($opinion) {
+                continue;
+            }
+            $moduleKey = pecModuleKey($item);
+            $nameKey = pecTestNameKey($name);
+            if (isset($testModules[$nameKey]) && $testModules[$nameKey] !== $moduleKey) {
+                throw new RuntimeException('Test name belongs to multiple modules: ' . $name);
+            }
+            $modules[$moduleKey] = true;
+            $testModules[$nameKey] = $moduleKey;
+        }
 
         $courseDetails = pecApiGet(PEC_EFRONT_ENDPOINTS['course_users'] . $courseId . '/Users', $apiBase, $apiKey);
         $courseUsers = $courseDetails['list'] ?? null;
@@ -653,16 +734,17 @@ try {
                 if ($testName === '') {
                     $testName = 'Unnamed test';
                 }
+                // Aggregate independently of display filters and of the latest score.
+                $moduleKey = $testModules[pecTestNameKey($testName)] ?? null;
+                if ($moduleKey !== null && pecAttemptCompleted($attempt)) {
+                    $score = pecScoreNumeric($attempt['score'] ?? null);
+                    $testOutcomes[$uid][$moduleKey] = ($testOutcomes[$uid][$moduleKey] ?? false)
+                        || (empty($attempt['correction_pending']) && $score !== null && $score >= 60);
+                }
                 if (!$showOpinion && pecIsOpinionTest($testName)) {
                     $hiddenOpinionCount++;
                     continue;
                 }
-                // A first attempt and its retake share one test. Keep any pass,
-                // even when a later attempt replaces the displayed score.
-                [$testKey] = pecTestSortKey($testName);
-                $score = pecScoreNumeric($attempt['score'] ?? null);
-                $testOutcomes[$uid][$testKey] = ($testOutcomes[$uid][$testKey] ?? false)
-                    || ($score !== null && $score >= 60);
                 $tests[$testName] = true;
                 $current = $matrix[$uid][$testName] ?? null;
                 $currentTime = is_array($current) ? (int) ($current['time_start'] ?? 0) : -1;
@@ -685,15 +767,11 @@ try {
     $mainError = $error->getMessage();
 }
 
-$totalTests = 0;
-foreach ($testOutcomes as $outcomes) {
-    $totalTests = max($totalTests, count($outcomes));
-}
-$totalResults = [];
+$totalModules = count($modules);
+$moduleResults = [];
 foreach ($users as $user) {
     $uid = (int) ($user['id'] ?? 0);
-    $passed = isset($userErrors[$uid]) ? '---' : (string) count(array_filter($testOutcomes[$uid] ?? []));
-    $totalResults[$uid] = $passed . ' / ' . $totalTests;
+    $moduleResults[$uid] = pecModuleResults($testOutcomes[$uid] ?? [], $totalModules, isset($userErrors[$uid]));
 }
 
 $exportError = null;
@@ -703,7 +781,7 @@ if (($_GET['export'] ?? '') === 'xlsx') {
         if (!$canExport) {
             throw new RuntimeException('Selecteer een cursus met zichtbare resultaten om te exporteren.');
         }
-        pecExportExcel($users, $tests, $matrix, $userErrors, $totalResults, $courseName, $groupName, $loadedAt, $showOpinion);
+        pecExportExcel($users, $tests, $matrix, $userErrors, $moduleResults, $courseName, $groupName, $loadedAt, $showOpinion);
     } catch (Throwable $error) {
         $exportError = $error->getMessage();
     }
@@ -812,7 +890,7 @@ if (($_GET['export'] ?? '') === 'xlsx') {
           <span><i class="dot low"></i> lager dan 60%</span>
           <span><i class="dot empty"></i> geen resultaat</span>
         </div>
-        <div class="hint">Total = geslaagde tests (minstens 60% bij een poging) / maximaal aantal unieke tests per deelnemer in deze selectie. Herkansingen tellen niet dubbel.</div>
+        <div class="hint">Voortgang = modules met een ingediende test / alle toetsmodules. Slaagpercentage = geslaagde modules (minstens 60% bij een poging) / alle toetsmodules. Alleen actieve toetsmodules tellen mee. Herkansingen tellen eenmaal; mening/avis telt niet mee.</div>
       </div>
 
       <?php if ($users === []): ?>
@@ -833,7 +911,8 @@ if (($_GET['export'] ?? '') === 'xlsx') {
                 <th class="row-head" scope="col" aria-sort="<?= $userOrder === 'api' ? 'none' : ($descending ? 'descending' : 'ascending') ?>">
                   <a href="?<?= pecH(http_build_query(array_merge($reportQuery, ['user_order' => $nextUserOrder]))) ?>" title="Volgende sortering: <?= pecH($userOrderOptions[$nextUserOrder]) ?>">Gebruiker · <?= pecH($userOrderOptions[$userOrder]) ?></a>
                 </th>
-                <th class="total-cell" scope="col" title="Geslaagde unieke tests / maximaal aantal unieke tests per deelnemer">Total</th>
+                <th class="total-cell" scope="col" title="Modules met een ingediende test / alle actieve toetsmodules">Voortgang</th>
+                <th class="total-cell" scope="col" title="Modules met minstens 60% bij een poging / alle actieve toetsmodules">Slaagpercentage</th>
                 <?php foreach ($tests as $testName): ?>
                   <th class="test-head"><span><?= pecH($testName) ?></span></th>
                 <?php endforeach; ?>
@@ -852,7 +931,8 @@ if (($_GET['export'] ?? '') === 'xlsx') {
                       <div class="user-error">API-fout: <?= pecH($userErrors[$uid]) ?></div>
                     <?php endif; ?>
                   </td>
-                  <td class="total-cell"><strong><?= pecH($totalResults[$uid]) ?></strong></td>
+                  <td class="total-cell"><strong><?= pecH($moduleResults[$uid]['progress']) ?></strong></td>
+                  <td class="total-cell"><strong><?= pecH($moduleResults[$uid]['pass_rate']) ?></strong></td>
                   <?php foreach ($tests as $testName): ?>
                     <?php $attempt = $matrix[$uid][$testName] ?? null; ?>
                     <?php $class = 'score-cell ' . pecCellClass($attempt); ?>
@@ -875,7 +955,7 @@ if (($_GET['export'] ?? '') === 'xlsx') {
   if (matrix) {
     const printable = document.createElement('div');
     printable.className = 'report-print-matrices';
-    const fixedColumns = 2; // Repeat the participant and Total in every section.
+    const fixedColumns = 3; // Repeat the participant, progress and pass rate in every section.
     const testCount = matrix.tHead.rows[0].cells.length - fixedColumns;
     for (let start = fixedColumns; start < fixedColumns + testCount; start += 10) {
       const section = document.createElement('section');
