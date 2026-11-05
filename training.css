@@ -783,12 +783,12 @@ body.modal-open {
 .report-page .matrix thead th { background: #f4f6f7; }
 .report-page .matrix .row-head { position: sticky; left: 0; z-index: 3; background: #fff; min-width: 440px; max-width: 440px; text-align: left; padding: 6px 8px; font-weight: normal; }
 .report-page .matrix thead .row-head { z-index: 5; background: #f4f6f7; font-weight: bold; }
-.report-page .matrix .total-cell { width: 72px; min-width: 72px; padding: 5px 8px; white-space: nowrap; }
+.report-page .matrix .total-cell { width: 42px; min-width: 42px; padding: 5px 4px; white-space: nowrap; }
 .report-page .user-identity { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .report-page .user-identity .user-name { flex: 0 1 auto; max-width: 45%; min-width: 0; }
 .report-page .user-identity .user-email { flex: 1 1 auto; min-width: 0; }
-.report-page .user-name { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.report-page .user-email { font-size: 11px; color: var(--pec-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.report-page .user-name { font-size: 13px; white-space: normal; overflow-wrap: anywhere; }
+.report-page .user-email { font-size: 11px; color: var(--pec-muted); white-space: normal; overflow-wrap: anywhere; }
 .report-page .user-error { font-size: 11px; color: var(--pec-danger); margin-top: 3px; }
 .report-page .test-head { width: 42px; min-width: 42px; max-width: 42px; height: 135px; }
 .report-page .matrix .test-head { vertical-align: bottom; }
@@ -830,11 +830,12 @@ body.modal-open {
     .report-page .report-print-matrices .matrix th,
     .report-page .report-print-matrices .matrix td { position: static; min-width: 0; max-width: none; width: auto; font-size: 9px; overflow-wrap: anywhere; }
     .report-page .report-print-matrices .matrix .row-head { width: 70mm; }
-    .report-page .report-print-matrices .matrix .total-cell { width: 16mm; padding: 4px; }
-    .report-page .report-print-matrices .test-head { height: auto; padding: 5px 3px; }
-    .report-page .report-print-matrices .test-head > span { writing-mode: horizontal-tb; transform: none; white-space: normal; font-size: 9px; padding: 0; line-height: 1.3; }
+    .report-page .report-print-matrices .matrix .total-cell { width: 10mm; padding: 4px; }
+    .report-page .report-print-matrices .test-head { height: 135px; padding: 5px 3px; }
+    .report-page .report-print-matrices .test-head > span { font-size: 9px; }
+    .report-page .report-print-matrices .user-identity { display: block; }
     .report-page .report-print-matrices .user-name,
-    .report-page .report-print-matrices .user-email { white-space: nowrap; font-size: 9px; }
+    .report-page .report-print-matrices .user-email { display: block; max-width: none; white-space: normal; font-size: 9px; }
     .report-page .matrix thead { display: table-header-group; }
     .report-page .matrix tr { break-inside: avoid; }
     .report-page .matrix td,

@@ -793,7 +793,7 @@ if (($_GET['export'] ?? '') === 'xlsx') {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>PEC - eFront Test Results</title>
-  <link rel="stylesheet" href="training.css?v=22">
+  <link rel="stylesheet" href="training.css?v=23">
 </head>
 <body class="admin-page report-page"><main>
   <div class="bar">
@@ -911,8 +911,8 @@ if (($_GET['export'] ?? '') === 'xlsx') {
                 <th class="row-head" scope="col" aria-sort="<?= $userOrder === 'api' ? 'none' : ($descending ? 'descending' : 'ascending') ?>">
                   <a href="?<?= pecH(http_build_query(array_merge($reportQuery, ['user_order' => $nextUserOrder]))) ?>" title="Volgende sortering: <?= pecH($userOrderOptions[$nextUserOrder]) ?>">Gebruiker · <?= pecH($userOrderOptions[$userOrder]) ?></a>
                 </th>
-                <th class="total-cell" scope="col" title="Modules met een ingediende test / alle actieve toetsmodules">Voortgang</th>
-                <th class="total-cell" scope="col" title="Modules met minstens 60% bij een poging / alle actieve toetsmodules">Slaagpercentage</th>
+                <th class="total-cell test-head" scope="col" title="Modules met een ingediende test / alle actieve toetsmodules"><span>Voortgang</span></th>
+                <th class="total-cell test-head" scope="col" title="Modules met minstens 60% bij een poging / alle actieve toetsmodules"><span>Slaagpercentage</span></th>
                 <?php foreach ($tests as $testName): ?>
                   <th class="test-head"><span><?= pecH($testName) ?></span></th>
                 <?php endforeach; ?>
@@ -925,7 +925,12 @@ if (($_GET['export'] ?? '') === 'xlsx') {
                   <td class="row-head">
                     <div class="user-identity">
                       <span class="user-name" title="<?= pecH(pecUserName($user)) ?>"><?= pecH(pecUserName($user)) ?></span>
-                      <span class="user-email" title="<?= pecH($user['email'] ?? ($user['login'] ?? '')) ?>"><?= pecH($user['email'] ?? ($user['login'] ?? '')) ?></span>
+                      <?php $email = trim((string) ($user['email'] ?? ($user['login'] ?? ''))); ?>
+                      <?php if (filter_var($email, FILTER_VALIDATE_EMAIL) !== false): ?>
+                        <a class="user-email" href="mailto:<?= pecH($email) ?>"><?= pecH($email) ?></a>
+                      <?php else: ?>
+                        <span class="user-email"><?= pecH($email) ?></span>
+                      <?php endif; ?>
                     </div>
                     <?php if (isset($userErrors[$uid])): ?>
                       <div class="user-error">API-fout: <?= pecH($userErrors[$uid]) ?></div>
